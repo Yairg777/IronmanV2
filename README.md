@@ -1,4 +1,4 @@
-# IronmanV2
+# SpidermanV1
 
 How to use it:
 Open Palm: Show your full palm to the camera to summon the Holographic Globe.
