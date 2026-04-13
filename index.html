@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spidey-Sense Hand Tracker</title>
+    <!-- MediaPipe & Three.js CDNs -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: #000;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        /* Video background (mirrored) */
+        #input_video {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            object-fit: cover;
+            transform: scaleX(-1);
+            z-index: 1;
+        }
+
+        /* 2D Canvas for Skeleton Overlay */
+        #output_canvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 2;
+            pointer-events: none;
+            transform: scaleX(-1);
+        }
+
+        /* Three.js Canvas */
+        #three_canvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 3;
+            pointer-events: none;
+        }
+
+        /* UI Elements */
+        #ui-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 10;
+            pointer-events: none;
+            border: 15px solid rgba(255, 0, 0, 0.2);
+            box-sizing: border-box;
+        }
+
+        .header {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: white;
+            background: rgba(180, 0, 0, 0.8);
+            padding: 10px 20px;
+            border-radius: 5px;
+            border-bottom: 4px solid #000;
+            text-transform: uppercase;
+            font-weight: bold;
+            letter-spacing: 2px;
+        }
+
+        .spidey-logo {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 60px;
+            height: 60px;
+            background: url('https://upload.wikimedia.org/wikipedia/commons/5/52/Spider-Man_logo.svg') no-repeat center;
+            background-size: contain;
+            filter: drop-shadow(0 0 10px red);
+        }
+
+        #thwip-indicator {
+            position: absolute;
+            bottom: 50px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: white;
+            font-size: 48px;
+            font-weight: 900;
+            text-shadow: 0 0 10px #ff0000, 0 0 20px #000;
+            opacity: 0;
+            transition: opacity 0.1s;
+        }
+
+        .loading {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            z-index: 100;
+            font-size: 24px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="loading-screen" class="loading">
+        Connecting to Spider-Network...<br>
+        <small>(Allow Camera Access)</small>
+    </div>
+
+    <video id="input_video"></video>
+    <canvas id="output_canvas"></canvas>
+    <canvas id="three_canvas"></canvas>
+
+    <div id="ui-overlay">
+        <div class="header">WEB-SLINGER HUD v1.0</div>
+        <div class="spidey-logo"></div>
+        <div id="thwip-indicator">THWIP!</div>
+    </div>
+
+    <script>
+        const videoElement = document.getElementById('input_video');
+        const canvasElement = document.getElementById('output_canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+        const thwipText = document.getElementById('thwip-indicator');
+
+        // --- THREE.JS SETUP ---
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({
+            canvas: document.getElementById('three_canvas'),
+            alpha: true,
+            antialias: true
+        });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+        scene.add(ambientLight);
+        const pointLight = new THREE.PointLight(0xff0000, 1);
+        pointLight.position.set(5, 5, 5);
+        scene.add(pointLight);
+
+        camera.position.z = 5;
+
+        // Web objects array
+        let webs = [];
+        let targets = [];
+
+        // Create some floating targets
+        function createTargets() {
+            const geometry = new THREE.IcosahedronGeometry(0.3, 0);
+            const material = new THREE.MeshPhongMaterial({ color: 0x333333, wireframe: true });
+            for(let i=0; i<8; i++) {
+                const mesh = new THREE.Mesh(geometry, material);
+                mesh.position.set(Math.random()*10-5, Math.random()*6-3, Math.random()*-5 - 2);
+                scene.add(mesh);
+                targets.push(mesh);
+            }
+        }
+        createTargets();
+
+        class WebStrand {
+            constructor(origin, direction) {
+                this.points = [];
+                this.segments = 20;
+                this.life = 1.0;
+                this.speed = 0.6;
+                this.origin = origin.clone();
+                this.direction = direction.clone().normalize();
+                
+                // Create geometry
+                const geometry = new THREE.BufferGeometry();
+                const positions = new Float32Array(this.segments * 3);
+                geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                
+                const material = new THREE.LineBasicMaterial({ 
+                    color: 0xffffff, 
+                    linewidth: 3, 
+                    transparent: true,
+                    opacity: 1
+                });
+                
+                this.line = new THREE.Line(geometry, material);
+                scene.add(this.line);
+                
+                this.currentLength = 0;
+            }
+
+            update() {
+                this.life -= 0.02;
+                this.currentLength += this.speed;
+                
+                const positions = this.line.geometry.attributes.position.array;
+                for (let i = 0; i < this.segments; i++) {
+                    const t = i / (this.segments - 1);
+                    const dist = t * this.currentLength;
+                    
+                    // Add some organic wobble
+                    const wobbleX = Math.sin(Date.now() * 0.01 + i) * 0.02;
+                    const wobbleY = Math.cos(Date.now() * 0.01 + i) * 0.02;
+
+                    positions[i * 3] = this.origin.x + (this.direction.x * dist) + wobbleX;
+                    positions[i * 3 + 1] = this.origin.y + (this.direction.y * dist) + wobbleY;
+                    positions[i * 3 + 2] = this.origin.z + (this.direction.z * dist);
+                }
+                
+                this.line.geometry.attributes.position.needsUpdate = true;
+                this.line.material.opacity = Math.min(this.life * 2, 1);
+                
+                if (this.life <= 0) {
+                    scene.remove(this.line);
+                    return false;
+                }
+                return true;
+            }
+        }
+
+        // --- GESTURE DETECTION ---
+        let lastShootTime = 0;
+        const SHOOT_COOLDOWN = 300; // ms
+
+        function detectSpiderPose(landmarks) {
+            // Landmarks: 0=wrist, 4=thumb, 8=index, 12=middle, 16=ring, 20=pinky
+            // We want Index and Pinky EXTENDED, Middle and Ring CURLED.
+            
+            const wrist = landmarks[0];
+            
+            const isExtended = (tipIdx, knuckleIdx) => {
+                const tip = landmarks[tipIdx];
+                const knuckle = landmarks[knuckleIdx];
+                // Distance from wrist
+                const tipDist = Math.sqrt(Math.pow(tip.x - wrist.x, 2) + Math.pow(tip.y - wrist.y, 2));
+                const knuDist = Math.sqrt(Math.pow(knuckle.x - wrist.x, 2) + Math.pow(knuckle.y - wrist.y, 2));
+                return tipDist > knuDist * 1.2;
+            };
+
+            const indexExtended = isExtended(8, 6);
+            const pinkyExtended = isExtended(20, 18);
+            const middleCurled = !isExtended(12, 10);
+            const ringCurled = !isExtended(16, 14);
+
+            return indexExtended && pinkyExtended && middleCurled && ringCurled;
+        }
+
+        // --- MEDIAPIPIE HANDS SETUP ---
+        const hands = new Hands({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+        });
+
+        hands.setOptions({
+            maxNumHands: 2,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.7,
+            minTrackingConfidence: 0.7
+        });
+
+        function onResults(results) {
+            document.getElementById('loading-screen').style.display = 'none';
+            
+            // Clear 2D Canvas
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+
+            if (results.multiHandLandmarks) {
+                for (const landmarks of results.multiHandLandmarks) {
+                    // 1. Draw Skeleton on 2D Canvas
+                    drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {color: '#FF0000', lineWidth: 4});
+                    drawLandmarks(canvasCtx, landmarks, {color: '#FFFFFF', lineWidth: 1, radius: 3});
+
+                    // 2. Check Gesture
+                    if (detectSpiderPose(landmarks)) {
+                        const now = Date.now();
+                        if (now - lastShootTime > SHOOT_COOLDOWN) {
+                            shootWeb(landmarks);
+                            lastShootTime = now;
+                            
+                            // Visual feedback
+                            thwipText.style.opacity = '1';
+                            setTimeout(() => thwipText.style.opacity = '0', 200);
+                        }
+                    }
+                }
+            }
+            canvasCtx.restore();
+        }
+
+        hands.onResults(onResults);
+
+        function shootWeb(landmarks) {
+            const wrist = landmarks[0];
+            const indexMcp = landmarks[5]; // Index knuckle
+            
+            // Convert MediaPipe coords (0 to 1) to Three.js coords
+            // Note: Screen is mirrored, but Three.js camera looks down -Z
+            const x = (wrist.x - 0.5) * 10;
+            const y = -(wrist.y - 0.5) * 6;
+            const origin = new THREE.Vector3(x, y, 0);
+            
+            // Direction from wrist through the palm center/index area
+            const dx = (indexMcp.x - wrist.x);
+            const dy = -(indexMcp.y - wrist.y);
+            const direction = new THREE.Vector3(dx, dy, -1).normalize();
+
+            webs.push(new WebStrand(origin, direction));
+        }
+
+        // --- CAMERA SETUP ---
+        const cameraUtils = new Camera(videoElement, {
+            onFrame: async () => {
+                await hands.send({image: videoElement});
+            },
+            width: 1280,
+            height: 720
+        });
+        cameraUtils.start();
+
+        // --- ANIMATION LOOP ---
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Update Webs
+            for (let i = webs.length - 1; i >= 0; i--) {
+                if (!webs[i].update()) {
+                    webs.splice(i, 1);
+                }
+            }
+
+            // Animate Targets
+            targets.forEach((t, i) => {
+                t.rotation.x += 0.01;
+                t.rotation.y += 0.01;
+                t.position.y += Math.sin(Date.now() * 0.001 + i) * 0.005;
+            });
+
+            renderer.render(scene, camera);
+        }
+
+        // Handle Resize
+        window.addEventListener('resize', () => {
+            const w = window.innerWidth;
+            const h = window.innerHeight;
+            camera.aspect = w / h;
+            camera.updateProjectionMatrix();
+            renderer.setSize(w, h);
+            canvasElement.width = w;
+            canvasElement.height = h;
+        });
+
+        // Initialize canvas sizes
+        canvasElement.width = window.innerWidth;
+        canvasElement.height = window.innerHeight;
+
+        animate();
+    </script>
+</body>
+</html>
