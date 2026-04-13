@@ -1,12 +1,18 @@
 # SpidermanV1
 
-Key Features:
-MediaPipe Integration: Uses the most stable CDN version for high-speed hand tracking.
+Key Features Included:
+Spider-Man Mask: A 3D procedural mask built with Three.js that maps to your face mesh landmarks. It includes head orientation (Pitch/Yaw/Roll).
 
-Dual-Canvas System: A 2D canvas draws the red "Spidey-suit" skeleton, while a WebGL canvas renders the 3D web strands.
+Hand Skeleton: Real-time dots for all 21 hand landmarks.
 
-Robust Gesture Logic: It measures the distance of finger tips relative to the wrist and knuckles to ensure "THWIP" only triggers when the middle fingers are properly curled.
+Holographic HUD: Cinematic red corner brackets and a scanline effect that moves vertically.
 
-Visual Flair: Includes a Spider-Man themed HUD, "THWIP!" text popups, and floating geometric targets to give the webs a sense of depth.
+Gesture Detection:
 
-Performance: All 3D objects are cleaned up (disposed) after their "life" ends to prevent the browser from slowing down.
+Open Palm: Making an open-hand gesture triggers the AI Panel (KAREN OS) to slide in.
+
+Pinch: Touching your thumb and index finger creates a visual "click" feedback in the status pill.
+
+AI Assistant: A text-based panel that simulates a suit AI. You can type commands like "status" or "who am I" to receive themed responses.
+
+Full Screen Mirror: The webcam feed is mirrored so it feels like a real mirror/suit overlay.
